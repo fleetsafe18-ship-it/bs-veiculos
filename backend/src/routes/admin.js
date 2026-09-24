@@ -1,34 +1,34 @@
 import { Router } from 'express';
 import multer from 'multer';
+import sharp from 'sharp';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { v4 as uuidv4 } from 'uuid';
 import * as veiculosRepo from '../db/veiculosRepo.js';
 import { requireAuth } from '../middleware/auth.js';
+import { uploadsDir } from '../paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const uploadsDir = path.join(__dirname, '..', '..', 'uploads');
+fs.mkdirSync(uploadsDir, { recursive: true });
 
 const MAX_FOTOS_POR_ENVIO = 24;
+const LADO_MAXIMO_PX = 2400;
+const QUALIDADE_JPEG = 85;
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadsDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${uuidv4()}${ext}`);
-  },
-});
+// Guarda o arquivo em memória (não em disco) — cada foto passa pelo sharp
+// antes de ser gravada, então o storage bruto do multer é só um buffer
+// temporário. Aceita qualquer image/*, incluindo HEIC de iPhone: o sharp
+// decodifica e sempre grava como .jpg, então o formato de origem não importa
+// pro resultado final (nem pro navegador que depois vai exibir a foto).
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage,
-  limits: { fileSize: 8 * 1024 * 1024, files: MAX_FOTOS_POR_ENVIO },
+  limits: { fileSize: 25 * 1024 * 1024, files: MAX_FOTOS_POR_ENVIO },
   fileFilter: (req, file, cb) => {
-    const tiposAceitos = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-    if (tiposAceitos.includes(file.mimetype)) {
+    if (file.mimetype.startsWith('image/')) {
       cb(null, true);
     } else {
-      cb(new Error('Formato de imagem não suportado'));
+      cb(new Error(`"${file.originalname}" não é uma imagem`));
     }
   },
 });
@@ -95,7 +95,11 @@ adminRouter.delete('/veiculos/:id', async (req, res) => {
 adminRouter.post('/veiculos/:id/fotos', (req, res) => {
   upload.array('fotos', MAX_FOTOS_POR_ENVIO)(req, res, async (err) => {
     if (err) {
-      return res.status(400).json({ erro: err.message });
+      // multer manda "File too large" nesse formato quando estoura o limite
+      const mensagem = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Uma das fotos passa de 25MB, mesmo já comprimida. Tente uma foto menor.'
+        : err.message;
+      return res.status(400).json({ erro: mensagem });
     }
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ erro: 'Nenhum arquivo enviado' });
@@ -103,11 +107,35 @@ adminRouter.post('/veiculos/:id/fotos', (req, res) => {
 
     const veiculo = await veiculosRepo.getPorId(req.params.id);
     if (!veiculo) {
-      req.files.forEach((file) => fs.unlink(file.path, () => {}));
       return res.status(404).json({ erro: 'Veículo não encontrado' });
     }
 
-    const urls = req.files.map((file) => `/uploads/${file.filename}`);
+    // Processa o lote inteiro antes de gravar qualquer coisa no banco: se uma
+    // foto falhar, nenhuma do lote fica "pendurada" sem aparecer em lugar
+    // nenhum — o usuário sempre vê um erro claro, nunca um upload silencioso.
+    const urls = [];
+    const arquivosGravados = [];
+    try {
+      for (const file of req.files) {
+        const nomeArquivo = `${uuidv4()}.jpg`;
+        const destino = path.join(uploadsDir, nomeArquivo);
+        try {
+          await sharp(file.buffer)
+            .rotate() // aplica a orientação EXIF antes de descartar os metadados
+            .resize({ width: LADO_MAXIMO_PX, height: LADO_MAXIMO_PX, fit: 'inside', withoutEnlargement: true })
+            .jpeg({ quality: QUALIDADE_JPEG })
+            .toFile(destino);
+        } catch {
+          throw new Error(`Não foi possível processar "${file.originalname}" — formato não suportado ou arquivo corrompido.`);
+        }
+        arquivosGravados.push(destino);
+        urls.push(`/uploads/${nomeArquivo}`);
+      }
+    } catch (erroProcessamento) {
+      arquivosGravados.forEach((caminho) => fs.unlink(caminho, () => {}));
+      return res.status(400).json({ erro: erroProcessamento.message });
+    }
+
     const fotos = await veiculosRepo.adicionarFotos(req.params.id, urls);
     res.status(201).json(fotos);
   });

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../../lib/api.js';
 import { assetUrl } from '../../lib/api.js';
+import { comprimirFotos } from '../../lib/imageCompression.js';
 
 const TIPOS = [
   { valor: 'carro', label: 'Carro' },
@@ -36,7 +37,7 @@ export default function VehicleForm() {
   const [fotos, setFotos] = useState([]);
   const [carregando, setCarregando] = useState(editando);
   const [salvando, setSalvando] = useState(false);
-  const [enviandoFotos, setEnviandoFotos] = useState(false);
+  const [statusFotos, setStatusFotos] = useState(null); // null | 'otimizando' | 'enviando'
   const [erro, setErro] = useState(null);
   const [arrastando, setArrastando] = useState(null);
 
@@ -72,6 +73,24 @@ export default function VehicleForm() {
     };
   }
 
+  // Preço é digitado como texto puro (só dígitos, guardado como inteiro em reais).
+  // Um <input type="number"> não serve aqui: ele só entende "." como separador
+  // decimal, nunca como separador de milhar — "71.900" digitado nele vira 71.9.
+  function digitosDoPreco(preco) {
+    const n = Math.round(Number(preco) || 0);
+    return n > 0 ? String(n) : '';
+  }
+
+  function formatarMilhar(digitos) {
+    if (!digitos) return '';
+    return Number(digitos).toLocaleString('pt-BR');
+  }
+
+  function onChangePreco(e) {
+    const digitos = e.target.value.replace(/\D/g, '').slice(0, 9);
+    setDados((d) => ({ ...d, preco: digitos }));
+  }
+
   async function salvar(e) {
     e.preventDefault();
     setErro(null);
@@ -93,17 +112,21 @@ export default function VehicleForm() {
   }
 
   async function onEnviarFotos(e) {
-    const arquivos = e.target.files;
-    if (!arquivos || arquivos.length === 0) return;
-    setEnviandoFotos(true);
+    const arquivos = Array.from(e.target.files || []);
+    if (arquivos.length === 0) return;
     setErro(null);
+
+    setStatusFotos('otimizando');
+    const paraEnviar = await comprimirFotos(arquivos);
+
+    setStatusFotos('enviando');
     try {
-      const novasFotos = await api.adminEnviarFotos(veiculoId, arquivos);
+      const novasFotos = await api.adminEnviarFotos(veiculoId, paraEnviar);
       setFotos((f) => [...f, ...novasFotos]);
     } catch (e) {
-      setErro(e.message || 'Falha ao enviar fotos');
+      setErro(e.message || 'Falha ao enviar fotos. Tente novamente.');
     } finally {
-      setEnviandoFotos(false);
+      setStatusFotos(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   }
@@ -206,7 +229,15 @@ export default function VehicleForm() {
         </div>
         <div>
           <label style={fieldLabel}>Preço (R$) *</label>
-          <input type="number" step="0.01" {...campo('preco')} required style={inputStyle} placeholder="98900" />
+          <input
+            type="text"
+            inputMode="numeric"
+            value={formatarMilhar(digitosDoPreco(dados.preco))}
+            onChange={onChangePreco}
+            required
+            style={inputStyle}
+            placeholder="98.900"
+          />
         </div>
 
         <div style={{ gridColumn: '1 / -1' }}>
@@ -246,6 +277,22 @@ export default function VehicleForm() {
               A primeira foto é usada como capa no card da vitrine. Arraste para reordenar.
             </p>
 
+            {erro && (
+              <div
+                style={{
+                  background: 'rgba(226,61,61,0.1)',
+                  border: '1px solid rgba(226,61,61,0.35)',
+                  color: '#E23D3D',
+                  borderRadius: 6,
+                  padding: '10px 14px',
+                  fontSize: 13,
+                  marginBottom: 14,
+                }}
+              >
+                {erro}
+              </div>
+            )}
+
             <label
               style={{
                 display: 'inline-flex',
@@ -260,14 +307,14 @@ export default function VehicleForm() {
                 marginBottom: 20,
               }}
             >
-              {enviandoFotos ? 'Enviando…' : '+ Adicionar fotos'}
+              {statusFotos === 'otimizando' ? 'Otimizando fotos…' : statusFotos === 'enviando' ? 'Enviando…' : '+ Adicionar fotos'}
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
                 multiple
                 onChange={onEnviarFotos}
-                disabled={enviandoFotos}
+                disabled={!!statusFotos}
                 style={{ display: 'none' }}
               />
             </label>

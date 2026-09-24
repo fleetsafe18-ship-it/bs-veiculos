@@ -1,10 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { dataDir } from '../paths.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dataDir = path.join(__dirname, '..', '..', 'data');
 fs.mkdirSync(dataDir, { recursive: true });
 
 const db = new DatabaseSync(path.join(dataDir, 'bsveiculos.sqlite3'));
