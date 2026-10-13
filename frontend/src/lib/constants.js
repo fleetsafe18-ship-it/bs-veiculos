@@ -1,7 +1,7 @@
 export const SITE_NAME = 'BS Veículos';
 export const SITE_LOCATION = 'Adamantina/SP';
-export const WHATSAPP_NUMBER = '5518996350086';
-export const WHATSAPP_DISPLAY = '(18) 99635-0086';
+export const WHATSAPP_NUMBER = '5518996302761';
+export const WHATSAPP_DISPLAY = '(18) 99630-2761';
 export const INSTAGRAM_HANDLE = '@bsveiculos_';
 export const INSTAGRAM_URL = 'https://instagram.com/bsveiculos_';
 
